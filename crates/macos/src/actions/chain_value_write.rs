@@ -126,7 +126,16 @@ mod imp {
         deadline: Deadline,
     ) -> Result<DeliveryOutcome, AdapterError> {
         prepare(element, deadline)?;
-        let delivered = ax_helpers::set_ax_bool_or_err(element, attribute, value, deadline)?;
+        let delivered = match ax_helpers::set_ax_bool_or_err(element, attribute, value, deadline) {
+            Ok(delivered) => delivered,
+            Err(error)
+                if error.disposition == agent_desktop_core::DeliverySemantics::uncertain()
+                    && focus_write_had_effect(element, attribute, value, deadline) =>
+            {
+                return Ok(DeliveryOutcome::DeliveredVerified);
+            }
+            Err(error) => return Err(error),
+        };
         if !delivered {
             return Ok(DeliveryOutcome::NotDelivered);
         }
@@ -134,10 +143,32 @@ mod imp {
         delivery.mark_delivered();
         prepare(element, deadline).map_err(|error| delivery.annotate(error))?;
         let observed = crate::tree::copy_bool_attr(element, attribute, deadline);
+        let verified = chain_verify::bool_write_had_effect(attribute, value, observed)
+            || focus_write_had_effect(element, attribute, value, deadline);
         Ok(DeliveryOutcome::from_delivery(
             delivered,
-            delivered && chain_verify::bool_write_had_effect(attribute, value, observed),
+            delivered && verified,
         ))
+    }
+
+    /// An element's own `AXFocused` stays false when it delegates editing to a
+    /// child, so reading it back calls a focus that plainly landed a failure.
+    /// The write itself answers `kAXErrorFailure` for the same reason, a code
+    /// that proves nothing either way, so both paths settle by looking instead.
+    fn focus_write_had_effect(
+        element: &AXElement,
+        attribute: &str,
+        value: bool,
+        deadline: Deadline,
+    ) -> bool {
+        if attribute != accessibility_sys::kAXFocusedAttribute || !value {
+            return false;
+        }
+        crate::actions::activation_effect::focus_state(element, deadline)
+            .and_then(|state| state.focused_element())
+            .is_some_and(|focused| {
+                crate::actions::activation_effect::focus_reached(&focused, element, deadline)
+            })
     }
 
     pub(crate) fn increment_action(current: &str, target: &str) -> Option<&'static str> {

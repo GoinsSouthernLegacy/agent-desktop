@@ -1,7 +1,9 @@
 use super::tests::entry;
 use super::*;
 use crate::tree::AXElement;
-use crate::tree::resolve_classify::classify_candidates;
+use crate::tree::resolve_classify::{
+    BoundsMatchOutcome, classify_bounds_matches, classify_candidates,
+};
 use crate::tree::resolve_search::{match_native_or_text_identity, should_stop_collecting};
 
 #[test]
@@ -43,7 +45,7 @@ fn identifier_kind_mismatch_is_not_an_exact_match() {
 }
 
 #[test]
-fn duplicate_identity_candidates_remain_ambiguous_after_bounds_drift() {
+fn duplicate_identity_candidates_are_stale_when_bounds_drift() {
     let error = classify_candidates(
         vec![
             AXElement(std::ptr::null_mut()),
@@ -54,9 +56,49 @@ fn duplicate_identity_candidates_remain_ambiguous_after_bounds_drift() {
         Instant::now() + Duration::from_secs(1),
     )
     .err()
-    .expect("duplicate live identities must remain ambiguous");
+    .expect("bounds mismatch against every candidate must be stale, not ambiguous");
 
-    assert_eq!(error.code, ErrorCode::AmbiguousTarget);
+    assert_eq!(error.code, ErrorCode::StaleRef);
+    let details = error.details.unwrap();
+    assert_eq!(details["kind"], "bounds_mismatch");
+    assert_eq!(details["candidate_count"], 2);
+}
+
+#[test]
+fn missing_bounds_hash_always_falls_through_to_ambiguous() {
+    assert_eq!(
+        classify_bounds_matches(0, false),
+        BoundsMatchOutcome::Ambiguous
+    );
+    assert_eq!(
+        classify_bounds_matches(2, false),
+        BoundsMatchOutcome::Ambiguous
+    );
+}
+
+#[test]
+fn zero_bounds_matches_is_stale_not_ambiguous() {
+    assert_eq!(classify_bounds_matches(0, true), BoundsMatchOutcome::Stale);
+}
+
+#[test]
+fn one_bounds_match_resolves_uniquely() {
+    assert_eq!(
+        classify_bounds_matches(1, true),
+        BoundsMatchOutcome::Resolved
+    );
+}
+
+#[test]
+fn two_or_more_bounds_matches_remain_ambiguous() {
+    assert_eq!(
+        classify_bounds_matches(2, true),
+        BoundsMatchOutcome::Ambiguous
+    );
+    assert_eq!(
+        classify_bounds_matches(38, true),
+        BoundsMatchOutcome::Ambiguous
+    );
 }
 
 #[test]

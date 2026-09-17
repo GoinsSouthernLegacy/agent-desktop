@@ -6,11 +6,18 @@ mod imp {
 
     const SETTLE_POLL_MS: u64 = 40;
     const SETTLE_BUDGET_MS: u64 = 400;
+    const FOCUS_DESCENT_WALK: usize = 3;
 
     /// The readback for `perform`, which has no written attribute to re-read.
+    /// Focus alone misses a whole family of controls: a sidebar row answers an
+    /// unsupported code to the action that navigates it, and moves its
+    /// selection rather than the focus. Selection is therefore read as well,
+    /// on every element, because an attribute an element does not publish reads
+    /// as absent and the rule simply never fires for it.
     #[derive(Default)]
     pub(crate) struct FocusState {
         focused_element: Option<AXElement>,
+        selected: Option<bool>,
     }
 
     /// Accessibility hands back a fresh reference for the same element on every
@@ -27,6 +34,12 @@ mod imp {
         }
     }
 
+    impl FocusState {
+        pub(crate) fn focused_element(self) -> Option<AXElement> {
+            self.focused_element
+        }
+    }
+
     pub(crate) fn focus_state(element: &AXElement, deadline: Deadline) -> Option<FocusState> {
         let app = crate::system::app_ops::pid_from_element(element, deadline)
             .map(crate::tree::element_for_pid)?;
@@ -37,6 +50,13 @@ mod imp {
                 deadline,
             )
             .ok()?,
+            selected: crate::tree::attributes::copy_bool_attr_result(
+                element,
+                crate::actions::container_select::SELECTED,
+                deadline,
+            )
+            .ok()
+            .flatten(),
         })
     }
 
@@ -49,8 +69,34 @@ mod imp {
         let target_focused = after
             .as_ref()
             .and_then(|state| state.focused_element.as_ref())
-            .is_some_and(|focused| crate::tree::same_element(focused, element));
+            .is_some_and(|focused| focus_reached(focused, element, deadline));
         observed_change(before, &after, target_focused)
+    }
+
+    /// A control that owns an editor hands focus to the editor, not to itself:
+    /// a PDF form field in Preview publishes a text area and focus lands there.
+    /// Demanding an exact match called that a failure and reported an action
+    /// that had plainly worked as one whose outcome was unknown.
+    pub(crate) fn focus_reached(
+        focused: &AXElement,
+        element: &AXElement,
+        deadline: Deadline,
+    ) -> bool {
+        let mut current = focused.clone();
+        for _ in 0..FOCUS_DESCENT_WALK {
+            if crate::tree::same_element(&current, element) {
+                return true;
+            }
+            let Some(parent) =
+                crate::tree::attributes::copy_element_attr_result(&current, "AXParent", deadline)
+                    .ok()
+                    .flatten()
+            else {
+                return false;
+            };
+            current = parent;
+        }
+        false
     }
 
     pub(crate) fn settled_change(
@@ -80,24 +126,75 @@ mod imp {
         after: &Option<FocusState>,
         target_focused: bool,
     ) -> bool {
-        target_focused && matches!((before, after), (Some(before), Some(after)) if before != after)
+        let focus_moved_to_target = target_focused
+            && matches!((before, after), (Some(before), Some(after)) if before != after);
+        focus_moved_to_target || selection_turned_on(before, after)
+    }
+
+    /// An element that was not selected and now is has been acted on, whatever
+    /// return code the application chose. The reverse is not evidence: a
+    /// selection that was already true says nothing about this action.
+    fn selection_turned_on(before: &Option<FocusState>, after: &Option<FocusState>) -> bool {
+        matches!(
+            (
+                before.as_ref().and_then(|state| state.selected),
+                after.as_ref().and_then(|state| state.selected),
+            ),
+            (Some(false), Some(true))
+        )
     }
 
     #[cfg(test)]
     mod tests {
         use super::*;
 
+        fn focused(pid: i32) -> Option<FocusState> {
+            Some(FocusState {
+                focused_element: Some(crate::tree::element_for_pid(pid)),
+                selected: None,
+            })
+        }
+
+        fn selected(value: Option<bool>) -> Option<FocusState> {
+            Some(FocusState {
+                focused_element: None,
+                selected: value,
+            })
+        }
+
         #[test]
         fn focus_changes_must_correlate_with_the_target() {
-            let before = Some(FocusState {
-                focused_element: Some(crate::tree::element_for_pid(1)),
-            });
-            let after = Some(FocusState {
-                focused_element: Some(crate::tree::element_for_pid(2)),
-            });
+            let before = focused(1);
+            let after = focused(2);
             assert!(!observed_change(&before, &after, false));
             assert!(observed_change(&before, &after, true));
             assert!(!observed_change(&after, &after, true));
+        }
+
+        #[test]
+        fn a_selection_that_turned_on_is_an_effect_without_any_focus_move() {
+            assert!(observed_change(
+                &selected(Some(false)),
+                &selected(Some(true)),
+                false
+            ));
+        }
+
+        #[test]
+        fn an_unchanged_or_unreadable_selection_proves_nothing() {
+            for (before, after) in [
+                (Some(true), Some(true)),
+                (Some(false), Some(false)),
+                (Some(true), Some(false)),
+                (None, Some(true)),
+                (Some(false), None),
+                (None, None),
+            ] {
+                assert!(
+                    !observed_change(&selected(before), &selected(after), false),
+                    "before={before:?} after={after:?} must not count as an effect"
+                );
+            }
         }
 
         #[test]
@@ -144,4 +241,6 @@ mod imp {
     }
 }
 
+#[cfg(target_os = "macos")]
+pub(crate) use imp::focus_reached;
 pub(crate) use imp::{changed_now, focus_state, settled_change};

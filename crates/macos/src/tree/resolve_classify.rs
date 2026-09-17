@@ -67,21 +67,61 @@ fn classify_ambiguous_candidates(
     entry: &RefEntry,
     deadline: std::time::Instant,
 ) -> Result<NativeHandle, AdapterError> {
-    if entry.geometry.bounds_hash.is_some() {
-        let mut bounds_matches = Vec::new();
+    let has_bounds_hash = entry.geometry.bounds_hash.is_some();
+    let mut bounds_matches = Vec::new();
+    if has_bounds_hash {
         for candidate in &matches {
             if verified_bounds_match(candidate, entry, deadline)? {
                 bounds_matches.push(candidate.clone());
             }
         }
-        match bounds_matches.len() {
-            0 => {}
-            1 => return retained_handle(bounds_matches.remove(0)),
-            _ => {}
-        }
     }
+    match classify_bounds_matches(bounds_matches.len(), has_bounds_hash) {
+        BoundsMatchOutcome::Resolved => retained_handle(bounds_matches.remove(0)),
+        BoundsMatchOutcome::Stale => Err(stale_ref_from_bounds_mismatch(entry, matches.len())),
+        BoundsMatchOutcome::Ambiguous => Err(ambiguous_target_error(&matches, entry)),
+    }
+}
+
+#[derive(Debug, PartialEq, Eq)]
+pub(super) enum BoundsMatchOutcome {
+    Resolved,
+    Stale,
+    Ambiguous,
+}
+
+pub(super) fn classify_bounds_matches(
+    bounds_match_count: usize,
+    has_bounds_hash: bool,
+) -> BoundsMatchOutcome {
+    if !has_bounds_hash {
+        return BoundsMatchOutcome::Ambiguous;
+    }
+    match bounds_match_count {
+        0 => BoundsMatchOutcome::Stale,
+        1 => BoundsMatchOutcome::Resolved,
+        _ => BoundsMatchOutcome::Ambiguous,
+    }
+}
+
+#[cfg(target_os = "macos")]
+fn stale_ref_from_bounds_mismatch(entry: &RefEntry, candidate_count: usize) -> AdapterError {
+    let mut error = AdapterError::stale_ref("element");
+    error.message = format!(
+        "No live candidate matched the saved element's bounds: \
+         {candidate_count} shared its identity, none its geometry"
+    );
+    error.with_details(serde_json::json!({
+        "kind": "bounds_mismatch",
+        "candidate_count": candidate_count,
+        "identity": identity_summary_for_message(entry),
+    }))
+}
+
+#[cfg(target_os = "macos")]
+fn ambiguous_target_error(matches: &[AXElement], entry: &RefEntry) -> AdapterError {
     let count = matches.len();
-    Err(AdapterError::ambiguous_target(format!(
+    AdapterError::ambiguous_target(format!(
         "Ambiguous target: {count} candidates matched {}",
         identity_summary_for_message(entry)
     ))
@@ -94,8 +134,8 @@ fn classify_ambiguous_candidates(
         "source_app": entry.source.source_app,
         "source_window_id": entry.source.source_window_id,
         "source_window_title": entry.source.source_window_title,
-        "candidates": candidate_summaries(&matches, entry)
-    })))
+        "candidates": candidate_summaries(matches, entry)
+    }))
 }
 
 #[cfg(target_os = "macos")]

@@ -267,4 +267,15 @@ mod tests {
             LocatorField::Unknown
         );
     }
+
+    #[test]
+    fn a_wide_nameless_row_with_a_complete_child_label_read_is_absent_not_unknown() {
+        let evidence = NameEvidence::default();
+        let status = NodeAttributeStatus::default();
+
+        assert_eq!(
+            name_field(&evidence, &status, Some("AXRow"), true),
+            LocatorField::Absent
+        );
+    }
 }

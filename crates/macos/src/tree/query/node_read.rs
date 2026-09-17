@@ -107,10 +107,13 @@ pub(crate) fn read_node(
         &identifiers,
         &actions,
     );
+    let wants_child_label = (requirements.name || requirements.description)
+        && crate::tree::child_labels::should_read_child_label(&role, &attrs.name_evidence);
+    let budget = child_plan.max_elements(wrapper_candidate, wants_child_label);
     let child_read = crate::tree::query::child_read::read_children(
         element,
         attrs.role.as_deref(),
-        child_plan.max_elements(wrapper_candidate),
+        budget,
         deadline,
     );
     stats.reads.counts.child_reads += child_read.status.attempts;
@@ -145,7 +148,8 @@ pub(crate) fn read_node(
     } else {
         (attrs.name_evidence.clone(), true)
     };
-    let children_complete = child_read.complete && !child_read.truncated() && child_label_complete;
+    let children_complete =
+        child_read.complete && child_label_complete && !unplanned_truncation(&child_read, budget);
     let name_field = if !requirements.name {
         LocatorField::Unknown
     } else {
@@ -220,6 +224,19 @@ pub(crate) fn read_node(
     })
 }
 
+/// A boundary node loads a few children on purpose, only to read a label from
+/// them, and reports its real child count separately. Calling that deliberate
+/// stop a truncation would mark the node's own name uncertain for doing exactly
+/// what the plan asked, and an uncertain name is worse than an absent one: it
+/// makes later strict resolution give up instead of matching. Whether the label
+/// itself is trustworthy is already answered by the label read.
+fn unplanned_truncation(
+    child_read: &ChildRead,
+    budget: crate::tree::query::child_read_budget::ChildReadBudget,
+) -> bool {
+    !budget.boundary && child_read.truncated()
+}
+
 fn permission_error(phase: &str) -> AdapterError {
     AdapterError::new(
         ErrorCode::PermDenied,
@@ -244,6 +261,39 @@ fn record_attribute_read(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn a_boundary_that_stopped_where_the_plan_said_is_not_a_truncated_read() {
+        use crate::tree::query::child_read_budget::ChildReadBudget;
+
+        let mut capped = ChildRead::empty(true);
+        capped.total_count = 9;
+        capped
+            .elements
+            .push(crate::tree::AXElement(std::ptr::null_mut()));
+
+        assert!(capped.truncated());
+        assert!(
+            !unplanned_truncation(
+                &capped,
+                ChildReadBudget {
+                    max_elements: 5,
+                    boundary: true
+                }
+            ),
+            "a boundary loads a few children on purpose and reports its real count separately"
+        );
+        assert!(
+            unplanned_truncation(
+                &capped,
+                ChildReadBudget {
+                    max_elements: 5,
+                    boundary: false
+                }
+            ),
+            "a read that ran out of budget mid-list leaves the name genuinely uncertain"
+        );
+    }
 
     #[test]
     fn attribute_stats_record_actual_batch_and_field_counts() {

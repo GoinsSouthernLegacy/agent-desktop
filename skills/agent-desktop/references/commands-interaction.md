@@ -153,7 +153,7 @@ agent-desktop set-value @s8f3k2p9:e2 "new value"
 ```
 Sets the value directly via the AX value attribute. Faster than `type` but may not trigger all UI callbacks. Use for text fields, text areas, and sliders.
 
-`delivered_verified` confirms the target element's value, not an application commit or a dependent document change. The result details identify `verification_scope: element_value` and `application_commit: not_verified`. For example, changing a spreadsheet's row-count text field does not prove the table resized; verify the table or target its native incrementor. A readable cell without `SetValue` is not directly editable: activate it and target the editor it exposes.
+`delivered_verified` confirms the target element's value, not an application commit or a dependent document change. The result details identify `verification_scope: element_value` and `application_commit: not_verified`. For example, changing a spreadsheet's row-count text field does not prove the table resized; verify the table or target its native incrementor. A readable cell without `SetValue` is not directly editable. Activate it, take a fresh snapshot, and target the text editor if one appears; some applications expose no editor and accept only keyboard input.
 
 ### clear
 ```bash

@@ -61,25 +61,34 @@ fn settled_window(
 ) -> Result<Option<WindowInfo>, AdapterError> {
     let mut poll_interval = Duration::from_millis(25);
     let mut grace_ends_at = None;
+    let mut last_read_failure: Option<AdapterError>;
     loop {
-        if let Some(window) = exact_window(pid, process_instance, deadline)? {
-            return Ok(Some(window));
+        match exact_window(pid, process_instance, deadline) {
+            Ok(Some(window)) => return Ok(Some(window)),
+            Ok(None) => last_read_failure = None,
+            Err(error) if window_read_is_not_ready_yet(&error) => last_read_failure = Some(error),
+            Err(error) => return Err(error),
         }
         if options.timeout_ms == 0
             || (!options.activate && grace_over(grace_ends_at, Instant::now()))
         {
-            return Ok(None);
+            return last_read_failure.map_or(Ok(None), Err);
         }
         if grace_ends_at.is_none() && startup_finished(pid, process_instance)? {
             grace_ends_at = Instant::now().checked_add(STARTUP_GRACE);
         }
         let remaining = deadline.remaining();
         if remaining.is_zero() {
-            return Ok(None);
+            return last_read_failure.map_or(Ok(None), Err);
         }
         std::thread::sleep(poll_interval.min(remaining));
         poll_interval = (poll_interval * 3 / 2).min(Duration::from_millis(250));
     }
+}
+
+#[cfg(target_os = "macos")]
+fn window_read_is_not_ready_yet(error: &AdapterError) -> bool {
+    matches!(error.code, ErrorCode::AppUnresponsive | ErrorCode::Timeout)
 }
 
 /// Ends the wait when the application has created whatever windows its launch

@@ -34,9 +34,27 @@ pub(crate) fn elements(
             "total_count": read.total_count,
             "loaded_count": read.elements.len(),
             "count_changed": read.status.count_changed,
+            "ax_error": native_ax_error(
+                read.status.api_disabled,
+                read.status.invalid_element,
+                read.status.health.cannot_complete,
+            ),
+            "read_health": read.status.health,
         })));
     }
     Ok(read.elements)
+}
+
+fn native_ax_error(api_disabled: bool, invalid_element: bool, cannot_complete: u64) -> Option<i32> {
+    if api_disabled {
+        Some(accessibility_sys::kAXErrorAPIDisabled)
+    } else if invalid_element {
+        Some(accessibility_sys::kAXErrorInvalidUIElement)
+    } else if cannot_complete > 0 {
+        Some(accessibility_sys::kAXErrorCannotComplete)
+    } else {
+        None
+    }
 }
 
 pub(crate) fn element(
@@ -160,5 +178,23 @@ mod tests {
         let error = ensure_before_deadline(Instant::now()).expect_err("expired deadline");
 
         assert_eq!(error.code, ErrorCode::Timeout);
+    }
+
+    #[test]
+    fn native_ax_error_prioritizes_permission_over_other_signals() {
+        assert_eq!(native_ax_error(true, true, 5), Some(kAXErrorAPIDisabled));
+    }
+
+    #[test]
+    fn native_ax_error_reports_cannot_complete_when_reads_were_merely_busy() {
+        assert_eq!(
+            native_ax_error(false, false, 1),
+            Some(kAXErrorCannotComplete)
+        );
+    }
+
+    #[test]
+    fn native_ax_error_is_absent_without_any_native_failure() {
+        assert_eq!(native_ax_error(false, false, 0), None);
     }
 }

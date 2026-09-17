@@ -83,7 +83,7 @@ impl ChildRead {
 
 #[cfg(target_os = "macos")]
 mod imp {
-    use super::super::child_read_telemetry as telemetry;
+    use super::super::{child_read_budget::ChildReadBudget, child_read_telemetry as telemetry};
     use super::*;
     use crate::{cf_type::created_cf_array, tree::ax_value};
     use accessibility_sys::{kAXErrorAttributeUnsupported, kAXErrorNoValue, kAXErrorSuccess};
@@ -95,13 +95,13 @@ mod imp {
     pub(crate) fn read_children(
         element: &AXElement,
         role: Option<&str>,
-        max_elements: usize,
+        budget: ChildReadBudget,
         deadline: std::time::Instant,
     ) -> ChildRead {
         super::super::child_source::read_resilient(
             crate::tree::element::child_attributes(role),
             deadline,
-            |attribute| read_attribute_children(element, attribute, max_elements, deadline),
+            |attribute| read_attribute_children(element, attribute, budget, deadline),
         )
     }
 
@@ -121,11 +121,12 @@ mod imp {
     pub(crate) fn read_attribute_children(
         element: &AXElement,
         attribute: &str,
-        max_elements: usize,
+        budget: impl Into<ChildReadBudget>,
         deadline: std::time::Instant,
     ) -> ChildRead {
-        let count_deadline =
-            super::super::child_read_budget::count_deadline(max_elements, deadline);
+        let budget = budget.into();
+        let (max_elements, boundary) = (budget.max_elements, budget.boundary);
+        let count_deadline = super::super::child_read_budget::count_deadline(boundary, deadline);
         let mut status = ChildReadStatus::default();
         if check_deadline(deadline, &mut status).is_err() {
             return ChildRead::failed(status);
@@ -359,12 +360,13 @@ mod imp {
 
 #[cfg(not(target_os = "macos"))]
 mod imp {
+    use super::super::child_read_budget::ChildReadBudget;
     use super::*;
 
     pub(crate) fn read_children(
         _element: &AXElement,
         _role: Option<&str>,
-        _max_elements: usize,
+        _budget: ChildReadBudget,
         _deadline: std::time::Instant,
     ) -> ChildRead {
         ChildRead::empty(true)
@@ -373,7 +375,7 @@ mod imp {
     pub(crate) fn read_attribute_children(
         _element: &AXElement,
         _attribute: &str,
-        _max_elements: usize,
+        _budget: impl Into<ChildReadBudget>,
         _deadline: std::time::Instant,
     ) -> ChildRead {
         ChildRead::empty(true)

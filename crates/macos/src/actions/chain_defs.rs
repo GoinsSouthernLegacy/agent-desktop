@@ -15,7 +15,10 @@ mod imp {
                 button: MouseButton::Left,
                 count: 1,
             },
-            ChainStep::Action("AXPress"),
+            ChainStep::CustomWithDeadline {
+                label: "AXPress",
+                func: crate::actions::press_selection::press_or_report_no_effect,
+            },
             ChainStep::Action("AXOpen"),
             ChainStep::CustomWithDeadline {
                 label: "activate_descendant",

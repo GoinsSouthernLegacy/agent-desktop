@@ -23,12 +23,15 @@ pub(crate) fn complete_name_evidence_with_deadline(
     Ok((evidence, complete))
 }
 
-fn should_read_child_label(role: &str, evidence: &agent_desktop_core::NameEvidence) -> bool {
+pub(crate) fn should_read_child_label(
+    role: &str,
+    evidence: &agent_desktop_core::NameEvidence,
+) -> bool {
     names_from_child_content(role) && !has_name_without_child_content(evidence)
 }
 
 fn names_from_child_content(role: &str) -> bool {
-    agent_desktop_core::roles::INTERACTIVE_ROLES.contains(&role)
+    agent_desktop_core::roles::INTERACTIVE_ROLES.contains(&role) || role == "row"
 }
 
 fn has_name_without_child_content(evidence: &agent_desktop_core::NameEvidence) -> bool {
@@ -51,45 +54,48 @@ fn label_from_children(
 ) -> Result<(Option<String>, bool), agent_desktop_core::AdapterError> {
     let mut labels = Vec::new();
     note_label_limit(children.len(), sinks.stats);
-    let mut complete = children.len() <= MAX_LABEL_ELEMENTS;
+    let capped = children.len() > MAX_LABEL_ELEMENTS;
+    let mut reads_complete = true;
     for child in children.iter().take(MAX_LABEL_ELEMENTS) {
         let (role, role_complete) = timed_string(child, "AXRole", deadline, sinks)?;
-        complete &= role_complete;
+        reads_complete &= role_complete;
         match role.as_deref() {
             Some("AXStaticText") => {
                 let (subrole, subrole_complete) =
                     timed_string(child, "AXSubrole", deadline, sinks)?;
-                complete &= subrole_complete;
+                reads_complete &= subrole_complete;
                 if subrole.as_deref() != Some("AXSecureTextField") {
-                    complete &= push_static_text(&mut labels, child, deadline, sinks)?;
+                    reads_complete &= push_static_text(&mut labels, child, deadline, sinks)?;
                 }
             }
             Some("AXCell") | Some("AXGroup") => {
                 let (title, title_complete) = timed_string(child, "AXTitle", deadline, sinks)?;
-                complete &= title_complete;
+                reads_complete &= title_complete;
                 if let Some(title) = title {
                     labels.push(title);
                 }
                 let grandchildren = crate::tree::query::child_read::read_children(
                     child,
                     role.as_deref(),
-                    MAX_LABEL_ELEMENTS,
+                    crate::tree::query::child_read_budget::ChildReadBudget::inferred(
+                        MAX_LABEL_ELEMENTS,
+                    ),
                     deadline,
                 );
                 record_child_read(&grandchildren, sinks.stats)?;
-                complete &= grandchildren.complete
+                reads_complete &= grandchildren.complete
                     && !grandchildren.truncated()
                     && !grandchildren.status.invalid_element;
                 for grandchild in grandchildren.elements {
                     let (role, role_complete) =
                         timed_string(&grandchild, "AXRole", deadline, sinks)?;
-                    complete &= role_complete;
+                    reads_complete &= role_complete;
                     if role.as_deref() == Some("AXStaticText") {
                         let (subrole, subrole_complete) =
                             timed_string(&grandchild, "AXSubrole", deadline, sinks)?;
-                        complete &= subrole_complete;
+                        reads_complete &= subrole_complete;
                         if subrole.as_deref() != Some("AXSecureTextField") {
-                            complete &=
+                            reads_complete &=
                                 push_static_text(&mut labels, &grandchild, deadline, sinks)?;
                         }
                     }
@@ -99,7 +105,13 @@ fn label_from_children(
         }
     }
     let (label, join_complete) = join_unique_labels(labels, sinks.usage);
-    Ok((label, complete && join_complete))
+    let complete =
+        label_read_completeness(reads_complete && join_complete, capped, label.is_some());
+    Ok((label, complete))
+}
+
+fn label_read_completeness(reads_complete: bool, capped: bool, label_found: bool) -> bool {
+    reads_complete && (!capped || !label_found)
 }
 
 #[cfg(not(target_os = "macos"))]

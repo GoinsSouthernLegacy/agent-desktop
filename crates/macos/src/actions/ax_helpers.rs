@@ -210,11 +210,10 @@ mod imp {
         error: i32,
         settable: bool,
     ) -> Result<bool, AdapterError> {
-        use accessibility_sys::{kAXErrorAttributeUnsupported, kAXErrorNoValue};
         if error == kAXErrorSuccess {
             return Ok(settable);
         }
-        if error == kAXErrorAttributeUnsupported || error == kAXErrorNoValue {
+        if crate::tree::ax_absence::is_absent_attribute_error(error) {
             return Ok(false);
         }
         Err(read_failure(attribute, error))
@@ -279,6 +278,39 @@ mod imp {
             .map_err(|error| read_failure(kAXRoleAttribute, error))?;
         ensure_read_finished(deadline)?;
         Ok(role.map(|role| crate::tree::roles::ax_role_to_str(&role).to_string()))
+    }
+
+    #[cfg(test)]
+    mod settable_tests {
+        use super::classify_settable_read;
+
+        #[test]
+        fn an_unanswerable_settability_probe_reads_as_not_settable() {
+            for error in [
+                accessibility_sys::kAXErrorFailure,
+                accessibility_sys::kAXErrorAttributeUnsupported,
+                accessibility_sys::kAXErrorNoValue,
+                accessibility_sys::kAXErrorNotImplemented,
+            ] {
+                assert_eq!(
+                    classify_settable_read("AXSelected", error, false).ok(),
+                    Some(false),
+                    "a probe that cannot be answered means do not attempt the write, \
+                     not fail the command"
+                );
+            }
+        }
+
+        #[test]
+        fn a_transport_failure_still_fails_the_settability_probe() {
+            for error in [
+                accessibility_sys::kAXErrorCannotComplete,
+                accessibility_sys::kAXErrorInvalidUIElement,
+                accessibility_sys::kAXErrorAPIDisabled,
+            ] {
+                assert!(classify_settable_read("AXSelected", error, false).is_err());
+            }
+        }
     }
 }
 

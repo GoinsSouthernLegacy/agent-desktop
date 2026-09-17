@@ -89,7 +89,7 @@ fn stabilize_records_until(
     let mut last_failure: Option<AdapterError> = None;
     loop {
         if Instant::now() >= deadline {
-            return Err(unstable_inventory_error(
+            return Err(expired_deadline_error(
                 attempts,
                 churn_events,
                 last_failure.as_ref(),
@@ -259,6 +259,19 @@ pub(super) fn inventory_error(message: &str) -> AdapterError {
 
 fn retryable_inventory_error(error: &AdapterError) -> bool {
     error.code == ErrorCode::AppUnresponsive && error.is_explicitly_retryable()
+}
+
+fn expired_deadline_error(
+    attempts: u64,
+    churn_events: u64,
+    last_failure: Option<&AdapterError>,
+) -> AdapterError {
+    if attempts == 0 {
+        return AdapterError::timeout(
+            "CoreGraphics window inventory deadline elapsed before any capture attempt",
+        );
+    }
+    unstable_inventory_error(attempts, churn_events, last_failure)
 }
 
 fn unstable_inventory_error(

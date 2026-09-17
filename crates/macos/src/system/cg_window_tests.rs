@@ -8,6 +8,31 @@ fn expired_cg_window_deadline_is_rejected_before_native_reads() {
 }
 
 #[test]
+fn deadline_expired_before_any_capture_omits_the_unstable_inventory_kind() {
+    let error = window_records_until(Instant::now(), WindowRecordScope::Pid(1)).unwrap_err();
+
+    assert!(error.details.is_none());
+}
+
+#[test]
+fn expired_deadline_before_any_attempt_is_a_plain_timeout() {
+    let error = expired_deadline_error(0, 0, None);
+
+    assert_eq!(error.code, ErrorCode::Timeout);
+    assert!(error.details.is_none());
+}
+
+#[test]
+fn expired_deadline_after_attempts_still_reports_unstable_inventory() {
+    let error = expired_deadline_error(3, 2, None);
+
+    let details = error.details.unwrap();
+    assert_eq!(details["kind"], "core_graphics_window_inventory_unstable");
+    assert_eq!(details["attempts"], 3);
+    assert_eq!(details["churn_events"], 2);
+}
+
+#[test]
 fn malformed_cg_window_data_is_a_retryable_source_failure() {
     let error = missing_field_error("kCGWindowNumber");
 

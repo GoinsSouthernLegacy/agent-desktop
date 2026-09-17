@@ -165,7 +165,7 @@ fn finish(
             check.check == "editable" && check.status == super::status::ActionabilityStatus::Fail
         })
     {
-        "This cell is not directly editable. Activate the cell, take a fresh snapshot, then target the text editor it exposes. --headed alone does not enter cell editing."
+        "This cell is not directly editable. Activate it, take a fresh snapshot, and target the text editor if one appears; otherwise the application may accept only keyboard input (--headed)."
     } else {
         "Waiting will not help: this element cannot satisfy the action as targeted. Target an element that advertises the action (check available_actions in a fresh snapshot) or adjust the interaction policy (e.g. pass --headed)."
     };
@@ -184,4 +184,61 @@ fn finish(
     .with_details(details)
     .with_suggestion(suggestion)
     .with_disposition(crate::DeliverySemantics::not_delivered()))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn cell_evidence() -> ActionabilityEvidence {
+        ActionabilityEvidence {
+            state: crate::ElementState {
+                role: "cell".to_string(),
+                states: Vec::new(),
+                value: None,
+                enabled: None,
+                hidden: None,
+                offscreen: None,
+            },
+            states_complete: true,
+            bounds: None,
+            available_actions: Vec::new(),
+        }
+    }
+
+    fn failed_editable_check() -> super::super::check::ActionabilityCheck {
+        super::super::check::ActionabilityCheck {
+            check: "editable",
+            status: super::super::status::ActionabilityStatus::Fail,
+            reason: None,
+            occluder: None,
+            terminal_code: Some(ErrorCode::ActionNotSupported),
+            hit_test: None,
+            stability: None,
+        }
+    }
+
+    #[test]
+    fn non_editable_cell_suggestion_does_not_promise_an_editor_exists() {
+        let evidence = cell_evidence();
+        let report = ActionabilityReport::from_checks(
+            vec![failed_editable_check()],
+            None,
+            None,
+            None,
+            super::super::pointer_delivery::PointerDelivery::NotApplicable,
+        );
+
+        let error = finish(&evidence, report).expect_err("non-actionable report must fail");
+
+        assert_eq!(
+            error.suggestion.as_deref(),
+            Some(
+                "This cell is not directly editable. Activate it, take a fresh snapshot, and \
+                 target the text editor if one appears; otherwise the application may accept \
+                 only keyboard input (--headed)."
+            )
+        );
+        assert!(!error.suggestion.unwrap().contains("it exposes"));
+    }
 }

@@ -94,9 +94,9 @@ mod imp {
         let mut built = match outcome {
             DeliveryOutcome::NotDelivered => ActionStep::skipped(label),
             DeliveryOutcome::SatisfiedNoDelivery => ActionStep::skipped(label).with_verified(true),
-            DeliveryOutcome::DeliveredUnverified | DeliveryOutcome::DeliveredVerified => {
-                ActionStep::succeeded(label)
-            }
+            DeliveryOutcome::DeliveredUnverified
+            | DeliveryOutcome::DeliveredWithoutEffect
+            | DeliveryOutcome::DeliveredVerified => ActionStep::succeeded(label),
         };
         built = built.with_mechanism(step_mechanism(step));
         if outcome.was_delivered() {
@@ -146,6 +146,10 @@ pub(crate) use imp::{
 #[cfg(test)]
 #[path = "chain_tests.rs"]
 mod tests;
+
+#[cfg(test)]
+#[path = "chain_outcome_tests.rs"]
+mod outcome_tests;
 
 #[cfg(not(target_os = "macos"))]
 mod imp {

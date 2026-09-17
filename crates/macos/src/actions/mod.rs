@@ -24,6 +24,7 @@ mod physical_click;
 mod physical_keyboard;
 mod physical_target;
 pub(crate) mod post_state;
+pub(crate) mod press_selection;
 pub(crate) mod scroll;
 pub(crate) mod scroll_into_view;
 mod scroll_read;

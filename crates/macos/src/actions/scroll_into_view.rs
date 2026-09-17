@@ -23,7 +23,9 @@ mod imp {
         match scroll_to_verified(element, deadline)? {
             outcome @ (DeliveryOutcome::SatisfiedNoDelivery
             | DeliveryOutcome::DeliveredVerified) => Ok(outcome),
-            DeliveryOutcome::NotDelivered => scroll_ancestor_until_visible(element, deadline),
+            DeliveryOutcome::NotDelivered | DeliveryOutcome::DeliveredWithoutEffect => {
+                scroll_ancestor_until_visible(element, deadline)
+            }
             DeliveryOutcome::DeliveredUnverified => Err(unverified_scroll_error()),
         }
     }

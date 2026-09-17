@@ -19,6 +19,54 @@ fn child_label_cap_is_reported_as_incomplete_traversal() {
 }
 
 #[test]
+fn rows_take_their_name_from_child_content_like_tree_items() {
+    assert!(names_from_child_content("row"));
+    assert!(should_read_child_label(
+        "row",
+        &agent_desktop_core::NameEvidence::default()
+    ));
+}
+
+#[test]
+fn rows_with_their_own_title_still_skip_child_content() {
+    let evidence = agent_desktop_core::NameEvidence {
+        native_title: Some("2".into()),
+        ..Default::default()
+    };
+
+    assert!(!should_read_child_label("row", &evidence));
+}
+
+#[test]
+fn wide_nameless_row_label_read_is_a_clean_absence_not_an_unknown() {
+    assert!(
+        label_read_completeness(true, true, false),
+        "hitting the label cap with nothing found in a fully-read prefix is a definite \
+         absence, not an uncertain read"
+    );
+    assert!(
+        !label_read_completeness(false, true, false),
+        "a genuine attribute read failure inside the examined prefix must stay unknown \
+         even when the row is also wide enough to hit the cap"
+    );
+}
+
+#[test]
+fn a_found_label_from_a_truncated_row_stays_conservatively_incomplete() {
+    assert!(
+        !label_read_completeness(true, true, true),
+        "a label found from a capped, wider row might still be missing joined text from \
+         the unread tail, so it keeps its existing incomplete treatment"
+    );
+}
+
+#[test]
+fn a_row_within_the_cap_is_complete_regardless_of_whether_a_label_was_found() {
+    assert!(label_read_completeness(true, false, false));
+    assert!(label_read_completeness(true, false, true));
+}
+
+#[test]
 fn labels_are_normalized_deduplicated_and_joined_in_document_order() {
     let mut usage = usage(256);
     let labels = vec![

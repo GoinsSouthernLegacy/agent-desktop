@@ -85,12 +85,7 @@ impl LocatorTraversal {
         }
         self.note_visit(logical_depth, raw_depth);
         let requirements = self.request.evidence_for_raw_depth(raw_depth);
-        let boundary_elements = if raw_depth == 0 && self.request.hydrates_root_name_from_children()
-        {
-            crate::tree::child_labels::MAX_LABEL_ELEMENTS
-        } else {
-            0
-        };
+        let boundary_elements = boundary_label_elements(self.request, raw_depth);
         let child_plan = super::child_read_plan::ChildReadPlan::boundary_aware(
             self.usage.child_capacity(),
             boundary_elements,
@@ -137,7 +132,6 @@ impl LocatorTraversal {
         self.usage
             .note_child_demand(read.child_read.total_count, &mut self.arena.stats);
         let loaded_child_count = read.child_read.elements.len();
-        self.usage.claim_edges(loaded_child_count);
         self.arena.add_handles(loaded_child_count);
         let at_requested_boundary = child_logical_depth > self.request.max_logical_depth;
         let (children, children_count, subtree_complete) = if at_requested_boundary {
@@ -150,6 +144,7 @@ impl LocatorTraversal {
                 read.child_read.complete,
             )
         } else {
+            self.usage.claim_edges(loaded_child_count);
             let (children, complete) =
                 self.visit_children(read.child_read, (child_logical_depth, raw_depth))?;
             (children, None, complete)
@@ -245,6 +240,20 @@ fn retained_edge_certainty(prefix_certain: &mut bool, retained: bool) -> bool {
     edge_certain
 }
 
+/// How many children a node at the depth boundary may load purely to compute
+/// its own name from child content. A selected locator root hydrates this way
+/// only at its own boundary; a skeleton observation clamps depth everywhere,
+/// so every boundary node in the walk needs the same chance to name itself,
+/// not only the root.
+fn boundary_label_elements(request: ObservationRequest, raw_depth: u8) -> usize {
+    let hydrates_selected_root = raw_depth == 0 && request.hydrates_root_name_from_children();
+    if hydrates_selected_root || request.skeleton {
+        crate::tree::child_labels::MAX_LABEL_ELEMENTS
+    } else {
+        0
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -288,5 +297,40 @@ mod tests {
 
         assert!(retained_edge_certainty(&mut prefix_certain, false));
         assert!(!retained_edge_certainty(&mut prefix_certain, true));
+    }
+
+    fn skeleton_request() -> ObservationRequest {
+        ObservationRequest::snapshot(
+            &agent_desktop_core::TreeOptions {
+                skeleton: true,
+                ..agent_desktop_core::TreeOptions::default()
+            },
+            agent_desktop_core::Deadline::after(1_000).unwrap(),
+        )
+    }
+
+    #[test]
+    fn skeleton_boundary_nodes_request_label_children_at_any_depth() {
+        let request = skeleton_request();
+
+        assert_eq!(
+            boundary_label_elements(request, 0),
+            crate::tree::child_labels::MAX_LABEL_ELEMENTS
+        );
+        assert_eq!(
+            boundary_label_elements(request, 2),
+            crate::tree::child_labels::MAX_LABEL_ELEMENTS
+        );
+    }
+
+    #[test]
+    fn non_skeleton_snapshot_only_hydrates_a_selected_root_not_every_boundary() {
+        let request = ObservationRequest::snapshot(
+            &agent_desktop_core::TreeOptions::default(),
+            agent_desktop_core::Deadline::after(1_000).unwrap(),
+        );
+
+        assert_eq!(boundary_label_elements(request, 0), 0);
+        assert_eq!(boundary_label_elements(request, 2), 0);
     }
 }

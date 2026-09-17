@@ -41,10 +41,42 @@ impl AxDeadline for Deadline {
     }
 }
 
+fn read_slice(remaining: Duration) -> Duration {
+    remaining.min(MAX_IPC_SLICE)
+}
+
+/// A read is one step of a loop that re-checks its deadline between calls, so
+/// a short slice keeps a slow responder from owning the whole budget. A
+/// mutation has no such loop. Cutting one short cannot undo what the
+/// application already started, and it turns a button that merely takes a
+/// second into `kAXErrorCannotComplete` and an uncertain delivery. Half of what
+/// remains bounds the call and still leaves the caller budget to observe the
+/// result.
+fn mutation_slice(remaining: Duration) -> Duration {
+    (remaining / 2).max(MAX_IPC_SLICE).min(remaining)
+}
+
 #[cfg(target_os = "macos")]
 pub(crate) fn prepare(
     element: &super::AXElement,
     deadline: impl AxDeadline,
+) -> Result<Duration, AdapterError> {
+    install_messaging_timeout(element, deadline, read_slice)
+}
+
+#[cfg(target_os = "macos")]
+fn prepare_mutation(
+    element: &super::AXElement,
+    deadline: impl AxDeadline,
+) -> Result<Duration, AdapterError> {
+    install_messaging_timeout(element, deadline, mutation_slice)
+}
+
+#[cfg(target_os = "macos")]
+fn install_messaging_timeout(
+    element: &super::AXElement,
+    deadline: impl AxDeadline,
+    slice: fn(Duration) -> Duration,
 ) -> Result<Duration, AdapterError> {
     if element.0.is_null() {
         return Err(AdapterError::new(
@@ -52,10 +84,11 @@ pub(crate) fn prepare(
             "Cannot address a null accessibility element",
         ));
     }
-    let remaining = deadline
-        .absolute()?
-        .saturating_duration_since(Instant::now())
-        .min(MAX_IPC_SLICE);
+    let remaining = slice(
+        deadline
+            .absolute()?
+            .saturating_duration_since(Instant::now()),
+    );
     if remaining.is_zero() {
         return Err(AdapterError::timeout(
             "Accessibility deadline exhausted before IPC",
@@ -172,7 +205,7 @@ pub(crate) fn perform_action(
     action: CFStringRef,
     deadline: impl AxDeadline,
 ) -> Result<i32, AdapterError> {
-    prepare(element, deadline).map_err(pre_mutation_error)?;
+    prepare_mutation(element, deadline).map_err(pre_mutation_error)?;
     Ok(unsafe { AXUIElementPerformAction(element.0, action) })
 }
 
@@ -183,7 +216,7 @@ pub(crate) fn set_attribute_value(
     value: CFTypeRef,
     deadline: impl AxDeadline,
 ) -> Result<i32, AdapterError> {
-    prepare(element, deadline).map_err(pre_mutation_error)?;
+    prepare_mutation(element, deadline).map_err(pre_mutation_error)?;
     Ok(unsafe { AXUIElementSetAttributeValue(element.0, attribute, value) })
 }
 
@@ -265,5 +298,32 @@ mod tests {
             error.disposition,
             agent_desktop_core::DeliverySemantics::not_delivered()
         );
+    }
+
+    #[test]
+    fn a_mutation_outlives_the_read_slice_without_consuming_the_budget() {
+        let remaining = Duration::from_secs(3);
+
+        assert_eq!(read_slice(remaining), MAX_IPC_SLICE);
+        assert_eq!(mutation_slice(remaining), Duration::from_millis(1_500));
+        assert!(
+            mutation_slice(remaining) < remaining,
+            "a mutation must leave budget to observe its own result"
+        );
+    }
+
+    #[test]
+    fn a_short_deadline_never_shrinks_a_mutation_below_a_read() {
+        assert_eq!(
+            mutation_slice(Duration::from_millis(400)),
+            MAX_IPC_SLICE,
+            "half of a short deadline is worse than the slice reads already get"
+        );
+        assert_eq!(
+            mutation_slice(Duration::from_millis(100)),
+            Duration::from_millis(100),
+            "the cap can never exceed what is actually left"
+        );
+        assert!(mutation_slice(Duration::ZERO).is_zero());
     }
 }
