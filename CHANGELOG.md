@@ -1,5 +1,12 @@
 # Changelog
 
+## [0.9.2](https://github.com/lahfir/agent-desktop/compare/v0.9.1...v0.9.2) (2026-09-17)
+
+
+### Bug Fixes
+
+* make headless desktop actions report what actually happened, and add jev-desktop ([#206](https://github.com/lahfir/agent-desktop/issues/206)) ([0691eba](https://github.com/lahfir/agent-desktop/commit/0691eba25f6a7082b197bc73ad5daa0e3315c976))
+
 ## [0.9.1](https://github.com/lahfir/agent-desktop/compare/v0.9.0...v0.9.1) (2026-09-13)
 
 
