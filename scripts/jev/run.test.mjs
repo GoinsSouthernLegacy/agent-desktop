@@ -1,5 +1,6 @@
 import assert from "node:assert/strict";
 import { collect, offerable } from "./act.mjs";
+import { decide, rateRisk } from "./run.mjs";
 import {
   ARGV,
   OPS,
@@ -13,6 +14,7 @@ import {
   shouldStop,
   textSupply,
   validateChoice,
+  resolveModel,
 } from "./policy.mjs";
 
 const S = "s8f3k2p9";
@@ -203,6 +205,59 @@ const space = actionSpace(screen());
   assert.equal(safe.decision, "act");
   const risky = route({ target: "1", targetConfidence: 0.8, present: null, destructive: 0.9 });
   assert.equal(risky.decision, "confirm", "the same confidence is not enough once a step is hard to undo");
+}
+
+{
+  const saved = { ...process.env };
+  delete process.env.TYPESAFE_MODEL;
+  delete process.env.TYPESAFE_BASE_URL;
+  const native = "https://api.typesafe.ai/v1/systemone";
+  const router = "https://openrouter.ai/api/alpha/decisions";
+  assert.equal(resolveModel(undefined, native), "jev-latest", "the bare alias stays bare on the native API");
+  assert.equal(
+    resolveModel(undefined, router),
+    "~typesafe/jev-latest",
+    "OpenRouter scopes the same alias through the tilde form",
+  );
+  assert.equal(resolveModel("jev-1.13.0", router), "~typesafe/jev-1.13.0", "a bare version scopes the same way");
+  process.env.TYPESAFE_MODEL = "jev-1.13";
+  assert.equal(resolveModel(), "jev-1.13", "TYPESAFE_MODEL is honoured on the native API");
+  assert.equal(resolveModel(undefined, native), "jev-1.13", "an explicit native endpoint honours TYPESAFE_MODEL too");
+  for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+  Object.assign(process.env, saved);
+}
+
+{
+  const saved = { ...process.env };
+  const realFetch = globalThis.fetch;
+  const endpoint = "http://127.0.0.1:9/decisions";
+  process.env.TYPESAFE_BASE_URL = endpoint;
+  process.env.TYPESAFE_API_KEY = "test-key";
+  delete process.env.TYPESAFE_MODEL;
+  const sent = [];
+  globalThis.fetch = async (url, init) => {
+    sent.push({ url, auth: init.headers.Authorization, body: init.body === undefined ? undefined : JSON.parse(init.body) });
+    return { ok: true, status: 200, json: async () => ({ answers: {} }) };
+  };
+  const at = { app: "TextEdit", window: "Untitled" };
+  const node = Object.values(space.targets.CLICK)[0];
+  const wire = (value) => JSON.parse(JSON.stringify(value));
+  try {
+    await decide("save the file", at, space, [], true);
+    await rateRisk("save the file", at, "CLICK", node, true);
+    assert.deepEqual(sent.map((call) => call.url), [endpoint, endpoint], "both decisions go to the configured endpoint");
+    assert.ok(sent.every((call) => call.auth === "Bearer test-key"), "the key travels with each decision");
+    assert.deepEqual(sent[0].body, wire(buildRequest("save the file", at, space, [], { values: true })), "a turn posts its full request");
+    assert.deepEqual(
+      sent[1].body,
+      wire(riskRequest("save the file", at, "CLICK", node, { values: true })),
+      "the risk check posts its own request, never an empty body",
+    );
+  } finally {
+    globalThis.fetch = realFetch;
+    for (const k of Object.keys(process.env)) if (!(k in saved)) delete process.env[k];
+    Object.assign(process.env, saved);
+  }
 }
 
 console.log("ok");
